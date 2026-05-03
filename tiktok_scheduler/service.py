@@ -38,10 +38,33 @@ async def run_service() -> None:
     worker = PostingWorker(settings=settings, notify=notify)
     worker_task = worker.start()
 
-    bot_task = asyncio.create_task(
-        dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()),
-        name="telegram-bot",
-    )
+    async def run_bot_with_retries() -> None:
+        # Keep polling alive: log clearly on failure and back off so a
+        # transient 409 (Telegram thinks somebody else is polling) doesn't
+        # kill the bot for the rest of the session.
+        backoff = 5
+        while True:
+            try:
+                log.info("Telegram bot: starting polling")
+                await dp.start_polling(
+                    bot, allowed_updates=dp.resolve_used_update_types()
+                )
+                log.info("Telegram bot: polling stopped cleanly")
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Telegram bot: polling crashed, restarting in %ds. "
+                    "If this is a 'Conflict: terminated by other getUpdates' "
+                    "error, make sure you do NOT run /getUpdates manually or "
+                    "start a second `serve` while this one is running.",
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+
+    bot_task = asyncio.create_task(run_bot_with_retries(), name="telegram-bot")
 
     web_task: asyncio.Task | None = None
     web_server: uvicorn.Server | None = None
