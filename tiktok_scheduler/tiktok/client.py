@@ -231,68 +231,91 @@ class TikTokClient:
         for url in UPLOAD_URLS:
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                # Wait briefly for the upload UI to render.
-                await page.wait_for_load_state("networkidle", timeout=15_000)
                 # If we landed on the login page, the cookies are stale.
                 if "/login" in page.url:
                     raise RuntimeError("Redirected to login — session cookies expired")
+                # Wait for the actual upload UI to render — the file input, the
+                # iframe wrapper, or the contenteditable caption box.  We do
+                # NOT wait for ``networkidle`` because TikTok Studio has
+                # long-poll XHRs that never settle.
+                if not await self._wait_for_upload_ui(page):
+                    raise RuntimeError("Upload UI did not appear within 30s")
                 return
             except Exception as exc:
                 last_error = exc
                 log.warning("Failed to open %s: %s", url, exc)
         raise RuntimeError(f"Could not reach TikTok upload page: {last_error}")
 
-    async def _upload_file(self, page: Page, path: Path) -> None:
-        for selector in FILE_INPUT_SELECTORS:
-            try:
-                el = await page.wait_for_selector(selector, state="attached", timeout=20_000)
-                if el is None:
-                    continue
-                await el.set_input_files(str(path))
-                # Wait for the editor (caption box) to appear, signalling upload is in progress.
-                for cap in CAPTION_SELECTORS:
+    async def _wait_for_upload_ui(self, page: Page, timeout_ms: int = 30_000) -> bool:
+        """Wait for any of the markers that signal the upload page is ready.
+
+        TikTok renders the form inside an iframe in some regions, so we poll
+        the page (and any frames) for either the file input or the caption
+        editor.  Returns True as soon as one of them is attached.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout_ms / 1000
+        while asyncio.get_event_loop().time() < deadline:
+            for frame in [page.main_frame, *page.frames]:
+                for selector in (*FILE_INPUT_SELECTORS, *CAPTION_SELECTORS):
                     try:
-                        await page.wait_for_selector(cap, state="visible", timeout=60_000)
-                        return
-                    except PlaywrightTimeout:
-                        continue
-                return
-            except PlaywrightTimeout:
-                continue
-        raise RuntimeError("No file input found on the upload page")
+                        el = await frame.query_selector(selector)
+                    except Exception:
+                        el = None
+                    if el is not None:
+                        log.info("Upload UI ready: %s", selector)
+                        return True
+            await asyncio.sleep(0.5)
+        return False
+
+    async def _find_in_frames(
+        self, page: Page, selectors: tuple[str, ...], timeout_ms: int = 20_000
+    ):
+        """Search every frame for the first matching selector.
+
+        Returns ``(frame, element)`` tuple, or raises after ``timeout_ms``.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout_ms / 1000
+        while asyncio.get_event_loop().time() < deadline:
+            for frame in [page.main_frame, *page.frames]:
+                for sel in selectors:
+                    try:
+                        el = await frame.query_selector(sel)
+                    except Exception:
+                        el = None
+                    if el is not None:
+                        return frame, el, sel
+            await asyncio.sleep(0.3)
+        raise PlaywrightTimeout(
+            f"None of {selectors} appeared in any frame within {timeout_ms}ms"
+        )
+
+    async def _upload_file(self, page: Page, path: Path) -> None:
+        frame, el, sel = await self._find_in_frames(page, FILE_INPUT_SELECTORS)
+        log.info("Found file input %s in frame %s", sel, frame.name or "main")
+        await el.set_input_files(str(path))
+        # Wait until the caption editor shows up — that's the signal the
+        # upload is being processed and the metadata form is ready.
+        await self._find_in_frames(page, CAPTION_SELECTORS, timeout_ms=120_000)
 
     async def _fill_caption(self, page: Page, caption: str) -> None:
-        for selector in CAPTION_SELECTORS:
-            try:
-                box = await page.wait_for_selector(selector, state="visible", timeout=10_000)
-                if box is None:
-                    continue
-                await box.click()
-                # Clear existing content.
-                await page.keyboard.press("Control+A")
-                await page.keyboard.press("Delete")
-                await page.keyboard.type(caption, delay=15)
-                return
-            except PlaywrightTimeout:
-                continue
-        raise RuntimeError("Caption editor not found")
+        frame, box, sel = await self._find_in_frames(page, CAPTION_SELECTORS)
+        log.info("Found caption %s in frame %s", sel, frame.name or "main")
+        await box.click()
+        await page.keyboard.press("Control+A")
+        await page.keyboard.press("Delete")
+        await page.keyboard.type(caption, delay=15)
 
     async def _click_post(self, page: Page) -> None:
-        for selector in POST_BUTTON_SELECTORS:
-            try:
-                btn = await page.wait_for_selector(selector, state="visible", timeout=15_000)
-                if btn is None:
-                    continue
-                # Some variants disable the button briefly while encoding.
-                for _ in range(60):
-                    if await btn.is_enabled():
-                        break
-                    await asyncio.sleep(2)
-                await btn.click()
-                return
-            except PlaywrightTimeout:
-                continue
-        raise RuntimeError("Post button not found")
+        frame, btn, sel = await self._find_in_frames(
+            page, POST_BUTTON_SELECTORS, timeout_ms=30_000
+        )
+        log.info("Found post button %s in frame %s", sel, frame.name or "main")
+        # Some variants disable the button briefly while encoding.
+        for _ in range(60):
+            if await btn.is_enabled():
+                break
+            await asyncio.sleep(2)
+        await btn.click()
 
     async def _wait_for_success(self, page: Page, seconds: int) -> None:
         deadline = asyncio.get_event_loop().time() + seconds
