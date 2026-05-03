@@ -74,21 +74,76 @@ def import_cookies(
     path: Path = typer.Option(..., "--file", "-f", exists=True, readable=True),
     user_agent: str | None = typer.Option(None, "--user-agent"),
 ) -> None:
-    """Import cookies exported from a browser extension (JSON list)."""
+    """Import cookies exported from a browser extension.
+
+    Auto-detects JSON (Cookie-Editor) and Netscape (curl/wget) formats.
+    """
     asyncio.run(_import_cookies(name=name, path=path, user_agent=user_agent))
 
 
 async def _import_cookies(*, name: str, path: Path, user_agent: str | None) -> None:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise typer.BadParameter("Cookie file must contain a JSON array")
+    raw = path.read_text(encoding="utf-8").strip()
+    if not raw:
+        raise typer.BadParameter("Cookie file is empty")
+
+    cookies = _parse_cookie_file(raw)
+    if not cookies:
+        raise typer.BadParameter(
+            "No cookies found in file. Make sure you exported from Cookie-Editor "
+            "as JSON or Netscape format."
+        )
+
     await init_db()
     async with session_scope() as session:
         account = await get_account_by_name(session, name)
         if account is None:
             account = await create_account(session, name=name)
-        await save_session(session, account, data, user_agent)
-    typer.echo(f"Imported {len(data)} cookies for {name!r}")
+        await save_session(session, account, cookies, user_agent)
+    typer.echo(f"Imported {len(cookies)} cookies for {name!r}")
+
+
+def _parse_cookie_file(raw: str) -> list[dict]:
+    """Parse a cookie file (JSON or Netscape format)."""
+    stripped = raw.lstrip()
+    if stripped.startswith("[") or stripped.startswith("{"):
+        # JSON.  Cookie-Editor sometimes wraps the array in an object.
+        data = json.loads(stripped)
+        if isinstance(data, dict):
+            for key in ("cookies", "data", "items"):
+                if isinstance(data.get(key), list):
+                    return data[key]
+            raise typer.BadParameter("JSON cookie file must contain an array")
+        if isinstance(data, list):
+            return data
+        raise typer.BadParameter("JSON cookie file must contain an array")
+
+    # Netscape HTTP Cookie File:
+    #   domain  TAB  include_subdomains  TAB  path  TAB  secure  TAB  expires
+    #   TAB  name  TAB  value
+    cookies: list[dict] = []
+    for line in raw.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        domain, include_sub, cookie_path, secure, expires, c_name, value = parts[:7]
+        cookie: dict = {
+            "name": c_name,
+            "value": value,
+            "domain": domain,
+            "path": cookie_path or "/",
+            "secure": secure.upper() == "TRUE",
+            "httpOnly": include_sub.upper() == "TRUE",
+        }
+        try:
+            exp = int(expires)
+            if exp > 0:
+                cookie["expirationDate"] = exp
+        except ValueError:
+            pass
+        cookies.append(cookie)
+    return cookies
 
 
 @app.command(name="list-accounts")
