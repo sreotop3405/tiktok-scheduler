@@ -64,7 +64,17 @@ POST_BUTTON_SELECTORS = (
 
 # Floating tooltips / modals TikTok puts in front of the Post button.
 # We try to dismiss them before clicking so pointer events reach the button.
+# IMPORTANT: never click anything that *enables* a content-check feature on
+# the user's account — prefer Cancel/Close over Turn on/OK in those modals.
 DISMISS_BUTTON_SELECTORS = (
+    # Cancel / close on the "Turn on automatic content checks?" modal.
+    "[role='dialog'] button:has-text('Cancel')",
+    "[role='dialog'] button:has-text('Отмена')",
+    # Generic close-X variants on TikTok modals.
+    "[role='dialog'] button[aria-label='Close']",
+    "[data-floating-ui-portal] button[aria-label='Close']",
+    "div.TUXModal button[aria-label='Close']",
+    # Tooltips with explicit "Got it"/"OK"/"Continue" CTAs.
     "button:has-text('Got it')",
     "button:has-text('OK')",
     "button:has-text('Continue')",
@@ -72,8 +82,6 @@ DISMISS_BUTTON_SELECTORS = (
     "button:has-text('Понятно')",
     "button:has-text('Хорошо')",
     "button:has-text('Продолжить')",
-    "[data-floating-ui-portal] button[aria-label='Close']",
-    "[role='dialog'] button[aria-label='Close']",
 )
 
 # After a successful post, TikTok usually navigates somewhere with these markers.
