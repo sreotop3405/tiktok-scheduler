@@ -238,6 +238,11 @@ class TikTokClient:
             full_caption = _build_caption(caption, hashtag)
             if full_caption:
                 await self._fill_caption(page, full_caption)
+            # CRITICAL: TikTok shows the metadata form well before the
+            # video is actually finished uploading.  Wait for upload to
+            # complete (progress 100% / "Uploading..." gone) before we
+            # try to publish, otherwise the Post button does nothing.
+            await self._wait_for_upload_complete(page)
             await self._click_post(page)
             await self._wait_for_success(page, wait_after_post_seconds)
             return PostResult(success=True, posted_at=datetime.now(UTC))
@@ -332,6 +337,53 @@ class TikTokClient:
         await page.keyboard.press("Control+A")
         await page.keyboard.press("Delete")
         await page.keyboard.type(caption, delay=15)
+
+    async def _wait_for_upload_complete(self, page: Page, timeout_s: int = 600) -> None:
+        """Poll the upload progress until the file is fully uploaded.
+
+        TikTok Studio shows the metadata form right after the user picks a
+        file, but the actual upload runs asynchronously and the Post button
+        does nothing until it finishes.  We watch for any of these signals:
+
+          * "100%" text in the progress label
+          * the "Uploading..." overlay disappears from the preview
+          * an explicit text like "Uploaded" / "Загружено"
+        """
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        last_log = 0.0
+        while asyncio.get_event_loop().time() < deadline:
+            done = False
+            try:
+                # Best signal: the right-side preview removes "Uploading..."
+                # overlay once the upload finishes.
+                uploading = await page.query_selector("text=Uploading...")
+                progress = await page.query_selector("text=/^\\s*100\\s*%/")
+                explicit = await page.query_selector(
+                    "text=Uploaded"
+                ) or await page.query_selector("text=Загружено")
+                if explicit is not None:
+                    done = True
+                elif progress is not None:
+                    done = True
+                elif uploading is None:
+                    # No "Uploading..." marker visible AND a Post button
+                    # is enabled — treat as done.
+                    for sel in POST_BUTTON_SELECTORS:
+                        btn = await page.query_selector(sel)
+                        if btn is not None and await btn.is_enabled():
+                            done = True
+                            break
+            except Exception:  # pragma: no cover
+                done = False
+            if done:
+                log.info("Upload appears complete")
+                return
+            now = asyncio.get_event_loop().time()
+            if now - last_log > 10:
+                log.info("Still waiting for upload to complete...")
+                last_log = now
+            await asyncio.sleep(2)
+        log.warning("Upload completion not confirmed in %ds; trying to post anyway", timeout_s)
 
     async def _click_post(self, page: Page) -> None:
         frame, btn, sel = await self._find_in_frames(
