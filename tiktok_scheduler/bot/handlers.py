@@ -347,7 +347,14 @@ async def upload_done(message: Message, state: FSMContext) -> None:
 async def upload_receive(message: Message, state: FSMContext) -> None:
     settings = get_settings()
     data = await state.get_data()
-    account_id: int = data["account_id"]
+    account_id = data.get("account_id")
+    if account_id is None:
+        await state.clear()
+        await message.answer(
+            "Сессия загрузки сбилась — забыл к какому аккаунту кладу. "
+            "Сделай /upload и нажми кнопку с аккаунтом ещё раз."
+        )
+        return
 
     file_id, original_name = _extract_file(message)
     if file_id is None:
@@ -355,11 +362,26 @@ async def upload_receive(message: Message, state: FSMContext) -> None:
         return
 
     bot = message.bot
-    file = await bot.get_file(file_id)
-    suffix = Path(original_name).suffix or ".mp4"
-    target = settings.videos_dir / f"acc{account_id}_{file.file_unique_id}{suffix}"
-    settings.videos_dir.mkdir(parents=True, exist_ok=True)
-    await bot.download_file(file.file_path, destination=str(target))
+    try:
+        file = await bot.get_file(file_id)
+        suffix = Path(original_name).suffix or ".mp4"
+        target = settings.videos_dir / f"acc{account_id}_{file.file_unique_id}{suffix}"
+        settings.videos_dir.mkdir(parents=True, exist_ok=True)
+        await bot.download_file(file.file_path, destination=str(target))
+    except Exception as exc:
+        log.exception("Failed to download video from Telegram")
+        msg = str(exc)
+        if "file is too big" in msg.lower():
+            hint = (
+                "Telegram Bot API не отдаёт файлы > 20 МБ. "
+                "Сожми видео, или положи их в папку и запусти на ПК "
+                "`python -m tiktok_scheduler enqueue-folder "
+                "--name <acc> --folder <путь>` (см. README)."
+            )
+        else:
+            hint = msg[:200]
+        await message.answer(f"❌ Не смог скачать: {hint}")
+        return
 
     async with session_scope() as session:
         await add_video(

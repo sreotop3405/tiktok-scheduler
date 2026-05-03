@@ -14,6 +14,7 @@ from .db import init_db, session_scope
 from .models import utcnow
 from .service import run_service
 from .storage import (
+    add_video,
     create_account,
     get_account_by_name,
     list_accounts,
@@ -233,6 +234,76 @@ def init_db_cmd() -> None:
     """Create database tables."""
     asyncio.run(init_db())
     typer.echo(f"Initialized DB at {get_settings().db_path}")
+
+
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+
+
+@app.command(name="enqueue-folder")
+def enqueue_folder_cmd(
+    name: str = typer.Option(..., "--name", "-n", help="Account name"),
+    folder: Path = typer.Option(
+        ...,
+        "--folder",
+        "-d",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+        help="Folder with video files to enqueue",
+    ),
+    move: bool = typer.Option(
+        False, "--move", help="Move source files into data/videos instead of copying"
+    ),
+) -> None:
+    """Bulk-enqueue every video from a folder into the account's queue.
+
+    Useful when videos are too large for the Telegram /upload command (>20 MB).
+    """
+    asyncio.run(_enqueue_folder(name=name, folder=folder, move=move))
+
+
+async def _enqueue_folder(*, name: str, folder: Path, move: bool) -> None:
+    import shutil
+
+    settings = get_settings()
+    settings.videos_dir.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(
+        p for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in _VIDEO_EXTENSIONS
+    )
+    if not files:
+        typer.echo("No video files found in folder", err=True)
+        raise typer.Exit(code=1)
+
+    await init_db()
+    async with session_scope() as session:
+        account = await get_account_by_name(session, name)
+        if account is None:
+            raise typer.BadParameter(f"No account named {name!r}")
+        for src in files:
+            target = settings.videos_dir / f"acc{account.id}_{src.name}"
+            if target.exists():
+                # Avoid clobbering — append a counter.
+                base = target.stem
+                suffix = target.suffix
+                idx = 1
+                while target.exists():
+                    target = settings.videos_dir / f"{base}_{idx}{suffix}"
+                    idx += 1
+            if move:
+                shutil.move(str(src), str(target))
+            else:
+                shutil.copy2(str(src), str(target))
+            await add_video(
+                session,
+                account.id,
+                file_path=target,
+                original_name=src.name,
+            )
+            typer.echo(f"  + {src.name}")
+    typer.echo(f"Enqueued {len(files)} videos into {name!r}")
 
 
 def _utcnow_str() -> str:  # pragma: no cover - debug
