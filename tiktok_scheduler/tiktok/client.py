@@ -67,20 +67,26 @@ POST_BUTTON_SELECTORS = (
 # IMPORTANT: never click anything that *enables* a content-check feature on
 # the user's account — prefer Cancel/Close over Turn on/OK in those modals.
 DISMISS_BUTTON_SELECTORS = (
-    # Cancel / close on the "Turn on automatic content checks?" modal.
-    "[role='dialog'] button:has-text('Cancel')",
-    "[role='dialog'] button:has-text('Отмена')",
-    # Generic close-X variants on TikTok modals.
-    "[role='dialog'] button[aria-label='Close']",
+    # "Turn on automatic content checks?" modal — Cancel button.
+    # TikTok's TUXModal class does NOT set role="dialog"; match by class.
+    "div[class*='TUXModal'] button:has-text('Cancel')",
+    "div[class*='TUXModal'] button:has-text('Отмена')",
+    "div[class*='TUXModal'] button[aria-label='Close']",
+    "div[class*='Modal'] button:has-text('Cancel')",
+    "div[class*='Modal'] button:has-text('Отмена')",
+    "div[role='dialog'] button:has-text('Cancel')",
+    "div[role='dialog'] button:has-text('Отмена')",
+    "div[role='dialog'] button[aria-label='Close']",
+    # Floating tooltips (e.g. the "We'll automatically check your video for
+    # copyright" hint above the Post button).
     "[data-floating-ui-portal] button[aria-label='Close']",
-    "div.TUXModal button[aria-label='Close']",
-    # Tooltips with explicit "Got it"/"OK"/"Continue" CTAs.
+    "[data-floating-ui-portal] button:has-text('Got it')",
+    "[data-floating-ui-portal] button:has-text('Понятно')",
+    # Tooltips with "Got it"/"Continue" CTAs.
     "button:has-text('Got it')",
-    "button:has-text('OK')",
     "button:has-text('Continue')",
     "button:has-text('Post anyway')",
     "button:has-text('Понятно')",
-    "button:has-text('Хорошо')",
     "button:has-text('Продолжить')",
 )
 
@@ -338,42 +344,53 @@ class TikTokClient:
                 break
             await asyncio.sleep(2)
 
-        # Dismiss any floating tooltip / modal that might intercept the click
-        # (e.g. the "We'll check your video for copyright" overlay).
-        await self._dismiss_overlays(page)
+        # Try clicking the Post button.  If a floating modal/tooltip is
+        # blocking it, dismiss and retry.  Final fall-back is a JS dispatch.
+        for attempt in range(5):
+            await self._dismiss_overlays(page)
+            try:
+                await btn.click(timeout=5_000)
+                return
+            except PlaywrightTimeout:
+                log.warning(
+                    "Post button click intercepted (attempt %d); will retry",
+                    attempt + 1,
+                )
+                await asyncio.sleep(1)
+        log.warning("Post click still blocked; falling back to JS dispatch")
+        await btn.evaluate("(el) => el.click()")
 
-        try:
-            await btn.click(timeout=10_000)
-        except PlaywrightTimeout:
-            log.warning("Post button click intercepted; retrying via JS")
-            # Last resort: dispatch click directly on the element, bypassing
-            # pointer-event interception checks.
-            await btn.evaluate("(el) => el.click()")
+    async def _dismiss_overlays(self, page: Page) -> int:
+        """Best-effort: close any floating tooltip / modal on the page.
 
-    async def _dismiss_overlays(self, page: Page) -> None:
+        Returns the number of overlays we dismissed.
+        """
+        dismissed = 0
         # Press Escape a couple of times — usually closes any popover.
         try:
             await page.keyboard.press("Escape")
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.2)
             await page.keyboard.press("Escape")
         except Exception:  # pragma: no cover
             pass
-        # Click any obvious "Got it / OK / Continue" button on the page.
+        # Click any visible Cancel / Close / Got-it style button.
         for frame in [page.main_frame, *page.frames]:
             for sel in DISMISS_BUTTON_SELECTORS:
                 try:
-                    el = await frame.query_selector(sel)
+                    elements = await frame.query_selector_all(sel)
                 except Exception:
-                    el = None
-                if el is None:
-                    continue
-                try:
-                    if await el.is_visible():
+                    elements = []
+                for el in elements:
+                    try:
+                        if not await el.is_visible():
+                            continue
                         log.info("Dismissing overlay via %s", sel)
                         await el.click(timeout=3_000)
+                        dismissed += 1
                         await asyncio.sleep(0.5)
-                except Exception:  # pragma: no cover
-                    continue
+                    except Exception:  # pragma: no cover
+                        continue
+        return dismissed
 
     async def _wait_for_success(self, page: Page, seconds: int) -> None:
         deadline = asyncio.get_event_loop().time() + seconds
