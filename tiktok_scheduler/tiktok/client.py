@@ -119,7 +119,10 @@ class TikTokClient:
         headless: bool | None = None,
     ) -> BrowserContext:
         assert self._pw is not None
-        launch_kwargs: dict = {"headless": self.headless if headless is None else headless}
+        launch_kwargs: dict = {
+            "headless": self.headless if headless is None else headless,
+            "args": _CHROMIUM_ARGS,
+        }
         if self.settings.chromium_path:
             launch_kwargs["executable_path"] = self.settings.chromium_path
         proxy = proxy_url or self.settings.proxy_url
@@ -130,7 +133,11 @@ class TikTokClient:
             user_agent=user_agent or DEFAULT_USER_AGENT,
             viewport={"width": 1280, "height": 800},
             locale="en-US",
+            timezone_id="Europe/Moscow",
         )
+        # Stealth patches: hide the most obvious automation markers so TikTok
+        # is less aggressive with captchas / rate limits.
+        await context.add_init_script(_STEALTH_INIT_SCRIPT)
         if cookies:
             try:
                 await context.add_cookies(_normalize_cookies(cookies))
@@ -147,6 +154,7 @@ class TikTokClient:
         self,
         *,
         login_timeout_seconds: int = 600,
+        proxy_url: str | None = None,
     ) -> tuple[list[dict], str]:
         """Open a visible browser, let the user log in, return cookies + UA.
 
@@ -154,7 +162,7 @@ class TikTokClient:
           * a `sessionid` cookie shows up on tiktok.com, or
           * ``login_timeout_seconds`` elapse.
         """
-        context = await self._new_context(headless=False)
+        context = await self._new_context(headless=False, proxy_url=proxy_url)
         page = await context.new_page()
         await page.goto("https://www.tiktok.com/login", wait_until="domcontentloaded")
 
@@ -332,3 +340,76 @@ def _build_caption(caption: str, hashtag: str | None) -> str:
         if tag:
             parts.append(f"#{tag}")
     return " ".join(parts).strip()
+
+
+# Chromium launch flags that reduce automation fingerprints.
+_CHROMIUM_ARGS: list[str] = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--no-sandbox",
+    "--disable-infobars",
+    "--disable-dev-shm-usage",
+]
+
+
+# JavaScript injected into every page before it loads.  Mirrors the most
+# common detections used by anti-bot services and what playwright-stealth
+# patches.  Updating this is the first place to look when TikTok starts
+# challenging the browser more aggressively.
+_STEALTH_INIT_SCRIPT = """
+(() => {
+  // Hide navigator.webdriver
+  try {
+    Object.defineProperty(Navigator.prototype, 'webdriver', {
+      get: () => undefined,
+      configurable: true,
+    });
+  } catch (e) {}
+
+  // Plausible plugins array
+  try {
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [
+        { name: 'Chrome PDF Plugin' },
+        { name: 'Chrome PDF Viewer' },
+        { name: 'Native Client' },
+      ],
+    });
+  } catch (e) {}
+
+  // Languages
+  try {
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['ru-RU', 'ru', 'en-US', 'en'],
+    });
+  } catch (e) {}
+
+  // window.chrome shim
+  try {
+    if (!window.chrome) {
+      window.chrome = { runtime: {}, app: { isInstalled: false } };
+    }
+  } catch (e) {}
+
+  // Permissions API: notifications shouldn't return 'denied' under headless
+  try {
+    const orig = navigator.permissions && navigator.permissions.query;
+    if (orig) {
+      navigator.permissions.query = (params) =>
+        params && params.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : orig(params);
+    }
+  } catch (e) {}
+
+  // WebGL vendor/renderer
+  try {
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(p) {
+      if (p === 37445) return 'Intel Inc.';
+      if (p === 37446) return 'Intel Iris OpenGL Engine';
+      return getParameter.call(this, p);
+    };
+  } catch (e) {}
+})();
+"""

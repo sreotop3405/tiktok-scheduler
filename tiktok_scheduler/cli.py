@@ -34,23 +34,32 @@ def serve() -> None:
 def login(
     name: str = typer.Option(..., "--name", "-n", help="Account name to log in"),
     timeout: int = typer.Option(600, help="Login timeout in seconds"),
+    proxy: str | None = typer.Option(
+        None,
+        "--proxy",
+        help="Proxy URL, e.g. socks5://user:pass@host:1080 or http://host:8080",
+    ),
 ) -> None:
     """Open a visible browser, sign into TikTok, save cookies for ``name``."""
-    asyncio.run(_login(name=name, timeout=timeout))
+    asyncio.run(_login(name=name, timeout=timeout, proxy=proxy))
 
 
-async def _login(*, name: str, timeout: int) -> None:
+async def _login(*, name: str, timeout: int, proxy: str | None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     await init_db()
     async with session_scope() as session:
         account = await get_account_by_name(session, name)
         if account is None:
-            account = await create_account(session, name=name)
+            account = await create_account(session, name=name, proxy_url=proxy)
             typer.echo(f"Created new account record for {name!r}")
+        elif proxy and not account.proxy_url:
+            account.proxy_url = proxy
 
     typer.echo("Launching browser. Log in to TikTok in the window that opens.")
     async with TikTokClient(headless=False) as client:
-        cookies, ua = await client.interactive_login(login_timeout_seconds=timeout)
+        cookies, ua = await client.interactive_login(
+            login_timeout_seconds=timeout, proxy_url=proxy
+        )
 
     async with session_scope() as session:
         account = await get_account_by_name(session, name)
@@ -109,15 +118,33 @@ def post_now(
     caption: str = typer.Option("", "--caption", "-c"),
     hashtag: str = typer.Option("", "--hashtag", "-t"),
     headless: bool = typer.Option(False, "--headless/--headed"),
+    proxy: str | None = typer.Option(
+        None,
+        "--proxy",
+        help="Override the account's proxy URL for this run",
+    ),
 ) -> None:
     """One-off post bypassing the scheduler — useful for smoke-testing."""
     asyncio.run(
-        _post_now(name=name, file=file, caption=caption, hashtag=hashtag, headless=headless)
+        _post_now(
+            name=name,
+            file=file,
+            caption=caption,
+            hashtag=hashtag,
+            headless=headless,
+            proxy=proxy,
+        )
     )
 
 
 async def _post_now(
-    *, name: str, file: Path, caption: str, hashtag: str, headless: bool
+    *,
+    name: str,
+    file: Path,
+    caption: str,
+    hashtag: str,
+    headless: bool,
+    proxy: str | None,
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     await init_db()
@@ -127,7 +154,7 @@ async def _post_now(
             raise typer.BadParameter(f"No active session for {name!r}, run `login` first")
         cookies = json.loads(account.cookies_json)
         ua = account.user_agent
-        proxy = account.proxy_url
+        effective_proxy = proxy or account.proxy_url
 
     async with TikTokClient(headless=headless) as client:
         result = await client.post_video(
@@ -136,7 +163,7 @@ async def _post_now(
             hashtag=hashtag or None,
             cookies=cookies,
             user_agent=ua,
-            proxy_url=proxy,
+            proxy_url=effective_proxy,
         )
     if result.success:
         typer.echo(f"OK posted at {result.posted_at}")
