@@ -51,7 +51,7 @@ PAUSE = "\u23f8\ufe0f"
 @router.message.middleware()
 async def auth_middleware(handler, event: Message, data: dict):
     settings = get_settings()
-    owners = settings.telegram_owner_ids
+    owners = settings.owner_ids
     if owners and event.from_user and event.from_user.id not in owners:
         await event.answer("\u26d4\ufe0f Этот бот приватный.")
         return

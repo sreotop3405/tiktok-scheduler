@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     )
 
     telegram_bot_token: str = ""
-    telegram_owner_ids: list[int] = Field(default_factory=list)
+    # Stored as raw string to avoid pydantic-settings trying to JSON-parse
+    # the env var (which trips up on bare integers and CSV strings).
+    # Use ``owner_ids`` to read it as a list of ints.
+    telegram_owner_ids: str = ""
 
     data_dir: Path = Path("./data")
 
@@ -37,14 +40,29 @@ class Settings(BaseSettings):
 
     @field_validator("telegram_owner_ids", mode="before")
     @classmethod
-    def _parse_owner_ids(cls, value: object) -> list[int]:
-        if value is None or value == "":
-            return []
-        if isinstance(value, list):
-            return [int(v) for v in value]
+    def _coerce_owner_ids(cls, value: object) -> str:
+        if value is None:
+            return ""
         if isinstance(value, str):
-            return [int(part.strip()) for part in value.split(",") if part.strip()]
-        raise ValueError("telegram_owner_ids must be a comma-separated list of integers")
+            return value
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, (list, tuple)):
+            return ",".join(str(v).strip() for v in value if str(v).strip())
+        return str(value)
+
+    @property
+    def owner_ids(self) -> list[int]:
+        result: list[int] = []
+        for part in self.telegram_owner_ids.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                result.append(int(part))
+            except ValueError:
+                continue
+        return result
 
     @property
     def db_path(self) -> Path:

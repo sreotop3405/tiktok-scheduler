@@ -29,7 +29,7 @@ async def run_service() -> None:
     dp = build_dispatcher()
 
     async def notify(text: str) -> None:
-        for owner_id in settings.telegram_owner_ids:
+        for owner_id in settings.owner_ids:
             try:
                 await bot.send_message(owner_id, text)
             except Exception:
