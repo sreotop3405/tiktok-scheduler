@@ -26,7 +26,9 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
 
     web_host: str = "127.0.0.1"
-    web_port: int = 8000
+    # Avoid 8000 — on Windows the default Hyper-V / WSL excluded port ranges
+    # often eat 8000-8009 and bind() fails with WinError 10013.
+    web_port: int = 8765
     web_enabled: bool = True
 
     default_timezone: str = "Europe/Moscow"

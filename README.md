@@ -96,7 +96,7 @@ python -m tiktok_scheduler serve
 
 - Telegram-бот (long-polling)
 - Воркер-планировщик
-- Веб-UI на <http://127.0.0.1:8000>
+- Веб-UI на <http://127.0.0.1:8765> (порт можно поменять через `WEB_PORT` в `.env`)
 
 Дальше в Telegram открой бота и шли:
 
