@@ -390,6 +390,17 @@ class TikTokClient:
                         await asyncio.sleep(0.5)
                     except Exception:  # pragma: no cover
                         continue
+        # Some "New editing features"/"Use these sounds" floating tooltips
+        # don't have a Close button; they go away when you click anywhere
+        # outside.  Click a known-safe coordinate (top-center, well above
+        # any modal) to dismiss them.
+        try:
+            viewport = page.viewport_size or {"width": 1280, "height": 720}
+            # Click at ~5% from top, horizontal center: likely empty header area.
+            await page.mouse.click(viewport["width"] // 2, max(40, viewport["height"] // 20))
+            await asyncio.sleep(0.3)
+        except Exception:  # pragma: no cover
+            pass
         return dismissed
 
     async def _wait_for_success(self, page: Page, seconds: int) -> None:
