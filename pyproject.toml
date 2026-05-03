@@ -1,0 +1,42 @@
+[project]
+name = "tiktok-scheduler"
+version = "0.1.0"
+description = "Scheduled TikTok video uploader with Telegram bot and web UI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "sreotop3405" }]
+dependencies = [
+    "aiogram>=3.5.0",
+    "aiosqlite>=0.20.0",
+    "apscheduler>=3.10.4",
+    "fastapi>=0.111.0",
+    "jinja2>=3.1.4",
+    "playwright>=1.45.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-dotenv>=1.0.1",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "tzdata>=2024.1",
+    "typer>=0.12.3",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[project.scripts]
+tiktok-scheduler = "tiktok_scheduler.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tiktok_scheduler"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W"]
+# B008: typer / FastAPI use call expressions in default args by design.
+ignore = ["E501", "B008"]

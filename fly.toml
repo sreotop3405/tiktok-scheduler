@@ -1,0 +1,43 @@
+app = "tiktok-scheduler"
+primary_region = "fra"
+
+[build]
+
+[env]
+DATA_DIR = "/data"
+WEB_HOST = "0.0.0.0"
+WEB_PORT = "8080"
+DEFAULT_TIMEZONE = "Europe/Moscow"
+
+[mounts]
+source = "data"
+destination = "/data"
+
+[[services]]
+internal_port = 8080
+protocol = "tcp"
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 0
+
+[[services.ports]]
+port = 80
+handlers = ["http"]
+force_https = true
+
+[[services.ports]]
+port = 443
+handlers = ["tls", "http"]
+
+[[services.http_checks]]
+interval = "30s"
+grace_period = "20s"
+method = "get"
+path = "/healthz"
+protocol = "http"
+timeout = "5s"
+
+[[vm]]
+memory = "1gb"
+cpu_kind = "shared"
+cpus = 1

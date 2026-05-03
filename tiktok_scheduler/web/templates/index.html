@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TikTok Scheduler</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0e0e10;
+      --card: #1b1b1f;
+      --muted: #888;
+      --accent: #fe2c55;
+      --ok: #25c2a0;
+      --warn: #f5a524;
+      --err: #f25767;
+      --fg: #f1f1f3;
+    }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
+    header { padding: 16px 20px; border-bottom: 1px solid #222; }
+    h1 { margin: 0; font-size: 18px; }
+    main { padding: 16px; max-width: 720px; margin: 0 auto; }
+    .card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+    .pill.active { background: rgba(37, 194, 160, 0.2); color: var(--ok); }
+    .pill.needs_login, .pill.error, .pill.banned { background: rgba(242, 87, 103, 0.15); color: var(--err); }
+    .muted { color: var(--muted); font-size: 13px; }
+    ul { padding-left: 18px; margin: 8px 0; }
+    li { font-size: 14px; }
+    .err { color: var(--err); }
+    code { background: #2a2a2e; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>TikTok Scheduler</h1>
+    <div class="muted">Time zone: {{ settings.default_timezone }}</div>
+  </header>
+  <main>
+    {% if not items %}
+      <div class="card">
+        <p>Нет аккаунтов. Открой Telegram-бота и добавь аккаунт командой <code>/add</code>.</p>
+      </div>
+    {% endif %}
+    {% for it in items %}
+      {% set acc = it.account %}
+      {% set sch = it.schedule %}
+      <div class="card">
+        <div class="row">
+          <h2 style="margin:0;font-size:16px">@{{ acc.name }}</h2>
+          <span class="pill {{ acc.status }}">{{ acc.status }}</span>
+        </div>
+        <div class="muted">last used: {{ fmt(acc.last_used_at) }}</div>
+        {% if sch %}
+          <p>
+            Каждые <b>{{ sch.interval_minutes }} мин</b>,
+            окно <b>{{ "%02d"|format(sch.start_hour) }}:00–{{ "%02d"|format(sch.end_hour) }}:00</b><br>
+            Caption: «{{ sch.caption or "—" }}» · Хештег: {{ ('#' + sch.hashtag) if sch.hashtag else "—" }}<br>
+            Следующая попытка: <b>{{ it.next_at }}</b> · {{ "▶️ active" if sch.active else "⏸️ paused" }}
+          </p>
+        {% else %}
+          <p class="muted">Расписание не задано.</p>
+        {% endif %}
+        <div>
+          <b>В очереди ({{ it.queued|length }}):</b>
+          {% if it.queued %}
+            <ul>
+              {% for v in it.queued %}
+                <li>#{{ v.id }} · {{ v.original_name }} <span class="muted">[{{ v.status }}]</span></li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="muted">пусто</div>
+          {% endif %}
+        </div>
+        {% if it.posted %}
+          <div>
+            <b>Последние опубликованные:</b>
+            <ul>
+              {% for v in it.posted %}
+                <li>#{{ v.id }} · {{ v.original_name }} <span class="muted">{{ fmt(v.posted_at) }}</span></li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+        {% if it.failed %}
+          <div>
+            <b>Ошибки:</b>
+            <ul>
+              {% for v in it.failed %}
+                <li class="err">#{{ v.id }} · {{ v.original_name }} — {{ (v.error or "").split("\n")[0][:120] }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </main>
+</body>
+</html>
