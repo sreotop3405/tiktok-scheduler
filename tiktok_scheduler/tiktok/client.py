@@ -62,6 +62,20 @@ POST_BUTTON_SELECTORS = (
     "button:has-text('Publier')",
 )
 
+# Floating tooltips / modals TikTok puts in front of the Post button.
+# We try to dismiss them before clicking so pointer events reach the button.
+DISMISS_BUTTON_SELECTORS = (
+    "button:has-text('Got it')",
+    "button:has-text('OK')",
+    "button:has-text('Continue')",
+    "button:has-text('Post anyway')",
+    "button:has-text('Понятно')",
+    "button:has-text('Хорошо')",
+    "button:has-text('Продолжить')",
+    "[data-floating-ui-portal] button[aria-label='Close']",
+    "[role='dialog'] button[aria-label='Close']",
+)
+
 # After a successful post, TikTok usually navigates somewhere with these markers.
 SUCCESS_MARKERS = (
     "text=Your video has been uploaded",
@@ -315,7 +329,43 @@ class TikTokClient:
             if await btn.is_enabled():
                 break
             await asyncio.sleep(2)
-        await btn.click()
+
+        # Dismiss any floating tooltip / modal that might intercept the click
+        # (e.g. the "We'll check your video for copyright" overlay).
+        await self._dismiss_overlays(page)
+
+        try:
+            await btn.click(timeout=10_000)
+        except PlaywrightTimeout:
+            log.warning("Post button click intercepted; retrying via JS")
+            # Last resort: dispatch click directly on the element, bypassing
+            # pointer-event interception checks.
+            await btn.evaluate("(el) => el.click()")
+
+    async def _dismiss_overlays(self, page: Page) -> None:
+        # Press Escape a couple of times — usually closes any popover.
+        try:
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.3)
+            await page.keyboard.press("Escape")
+        except Exception:  # pragma: no cover
+            pass
+        # Click any obvious "Got it / OK / Continue" button on the page.
+        for frame in [page.main_frame, *page.frames]:
+            for sel in DISMISS_BUTTON_SELECTORS:
+                try:
+                    el = await frame.query_selector(sel)
+                except Exception:
+                    el = None
+                if el is None:
+                    continue
+                try:
+                    if await el.is_visible():
+                        log.info("Dismissing overlay via %s", sel)
+                        await el.click(timeout=3_000)
+                        await asyncio.sleep(0.5)
+                except Exception:  # pragma: no cover
+                    continue
 
     async def _wait_for_success(self, page: Page, seconds: int) -> None:
         deadline = asyncio.get_event_loop().time() + seconds

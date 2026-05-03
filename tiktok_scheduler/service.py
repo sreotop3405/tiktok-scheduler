@@ -29,9 +29,12 @@ async def run_service() -> None:
     dp = build_dispatcher()
 
     async def notify(text: str) -> None:
+        # The default bot session uses parse_mode=HTML, so any raw < / >
+        # in the message (eg. error tracebacks containing tags) would
+        # crash send_message.  Send notifications as plain text.
         for owner_id in settings.owner_ids:
             try:
-                await bot.send_message(owner_id, text)
+                await bot.send_message(owner_id, text, parse_mode=None)
             except Exception:
                 log.exception("Failed to notify owner %s", owner_id)
 
