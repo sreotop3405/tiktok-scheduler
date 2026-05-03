@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from playwright.async_api import (
     BrowserContext,
@@ -127,7 +128,7 @@ class TikTokClient:
             launch_kwargs["executable_path"] = self.settings.chromium_path
         proxy = proxy_url or self.settings.proxy_url
         if proxy:
-            launch_kwargs["proxy"] = {"server": proxy}
+            launch_kwargs["proxy"] = _parse_proxy(proxy)
         browser = await self._pw.chromium.launch(**launch_kwargs)
         context = await browser.new_context(
             user_agent=user_agent or DEFAULT_USER_AGENT,
@@ -313,6 +314,40 @@ class TikTokClient:
         # We were not able to confirm success, but the post may have gone through.
         # Treat as soft success — caller can re-check later.
         log.warning("Could not positively confirm upload success; treating as posted")
+
+
+def _parse_proxy(url: str) -> dict[str, str]:
+    """Convert a proxy URL into Playwright's proxy config dict.
+
+    Chromium's command-line ``--proxy-server`` does not understand embedded
+    credentials (``user:pass@host``).  Playwright works around this by taking
+    ``username``/``password`` as separate fields, but only if we split them
+    out of the URL ourselves.
+
+    NOTE: Chromium itself only accepts auth for HTTP/HTTPS proxies — SOCKS5
+    with username/password is not supported upstream.  We log a warning in
+    that case so the caller can switch to a non-auth SOCKS5 endpoint or an
+    authenticated HTTP proxy.
+    """
+    parsed = urlparse(url.strip())
+    if not parsed.scheme or not parsed.hostname:
+        # Bare ``host:port`` — assume http.
+        return {"server": f"http://{url.strip()}"}
+    server = f"{parsed.scheme}://{parsed.hostname}"
+    if parsed.port:
+        server += f":{parsed.port}"
+    config: dict[str, str] = {"server": server}
+    if parsed.username:
+        config["username"] = unquote(parsed.username)
+    if parsed.password:
+        config["password"] = unquote(parsed.password)
+    if parsed.scheme.startswith("socks") and (parsed.username or parsed.password):
+        log.warning(
+            "Chromium does not support authenticated SOCKS proxies; "
+            "credentials will be ignored. Use an HTTP/HTTPS proxy or an "
+            "auth-less SOCKS5 endpoint instead."
+        )
+    return config
 
 
 def _normalize_cookies(cookies: Iterable[dict]) -> list[dict]:
