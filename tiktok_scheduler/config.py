@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # the env var (which trips up on bare integers and CSV strings).
     # Use ``owner_ids`` to read it as a list of ints.
     telegram_owner_ids: str = ""
+    # Optional proxy for outgoing connections to api.telegram.org.
+    # Useful in regions where Telegram is throttled / blocked at the ISP.
+    # Supports http://, https://, socks4://, socks5://.  Credentials may
+    # be embedded: socks5://user:pass@host:1080
+    telegram_proxy_url: str | None = None
 
     data_dir: Path = Path("./data")
 
