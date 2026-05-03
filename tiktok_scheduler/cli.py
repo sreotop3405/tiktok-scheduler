@@ -236,6 +236,75 @@ def init_db_cmd() -> None:
     typer.echo(f"Initialized DB at {get_settings().db_path}")
 
 
+@app.command(name="set-proxy")
+def set_proxy_cmd(
+    name: str = typer.Option(..., "--name", "-n", help="Account name"),
+    proxy: str | None = typer.Option(
+        None,
+        "--proxy",
+        help="Proxy URL to set, e.g. http://user:pass@host:8080. "
+        "Note: Chromium does NOT support authenticated SOCKS5.",
+    ),
+    clear: bool = typer.Option(
+        False, "--clear", help="Remove the proxy from this account"
+    ),
+) -> None:
+    """Set or clear the proxy stored on an account.
+
+    Use --clear to remove the proxy entirely.  Without --clear and --proxy
+    set, the value will be written to ``accounts.proxy_url``.
+    """
+    if not clear and not proxy:
+        raise typer.BadParameter("Pass either --proxy <url> or --clear")
+    asyncio.run(_set_proxy(name=name, proxy=None if clear else proxy))
+
+
+async def _set_proxy(*, name: str, proxy: str | None) -> None:
+    await init_db()
+    async with session_scope() as session:
+        account = await get_account_by_name(session, name)
+        if account is None:
+            raise typer.BadParameter(f"No account named {name!r}")
+        account.proxy_url = proxy
+    typer.echo(
+        f"Account {name!r} proxy set to {proxy!r}"
+        if proxy
+        else f"Cleared proxy from account {name!r}"
+    )
+
+
+@app.command(name="requeue-stuck")
+def requeue_stuck_cmd(
+    name: str | None = typer.Option(
+        None, "--name", "-n", help="Limit to one account; default = all"
+    ),
+) -> None:
+    """Reset videos stuck in 'posting' status back to 'queued'.
+
+    Useful after a worker crash or proxy/launch failure where videos
+    were marked as currently-posting but never actually published.
+    """
+    asyncio.run(_requeue_stuck(name=name))
+
+
+async def _requeue_stuck(*, name: str | None) -> None:
+    from sqlalchemy import update as sa_update
+
+    from .models import Video
+
+    await init_db()
+    async with session_scope() as session:
+        stmt = sa_update(Video).where(Video.status == "posting")
+        if name is not None:
+            account = await get_account_by_name(session, name)
+            if account is None:
+                raise typer.BadParameter(f"No account named {name!r}")
+            stmt = stmt.where(Video.account_id == account.id)
+        stmt = stmt.values(status="queued", error=None)
+        result = await session.execute(stmt)
+    typer.echo(f"Re-queued {result.rowcount} stuck videos")
+
+
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 
 
